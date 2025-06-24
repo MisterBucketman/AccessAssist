@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Accessibility Assistant</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .card { border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 8px; }
+        button { padding: 10px 15px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        pre { background: #f4f4f4; padding: 10px; border-radius: 4px; overflow: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Accessibility Assistant</h1>
+
+        <div class="card">
+            <h2>Website Information</h2>
+            <input type="text" id="url" placeholder="Enter URL" value="http://localhost:8000/index.html" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+            <input type="text" id="query" placeholder="What do you want to do?" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+            <button onclick="processRequest()">Process Request</button>
+        </div>
+
+        <div class="card">
+            <h2>Assistant Guidance</h2>
+            <div id="guidance">Submit a request to see instructions</div>
+        </div>
+
+        <div class="card">
+            <h2>Execute Actions</h2>
+            <button onclick="executeActions()" id="execute-btn">Execute Actions</button>
+            <div id="execution-status">Ready</div>
+            <pre id="execution-logs" style="height: 200px; overflow: auto; background: #f4f4f4; padding: 10px; margin-top: 10px;"></pre>
+        </div>
+
+        <script>
+            async function executeActions() {
+                if (!currentResponse || !currentResponse.llm_response?.action_sequence) {
+                    alert("No actions available. Please process a request first.");
+                    return;
+                }
+
+                const url = document.getElementById('url').value;
+                const actions = currentResponse.llm_response.action_sequence;
+
+                document.getElementById('execute-btn').disabled = true;
+                document.getElementById('execution-status').innerHTML = "Executing actions...";
+                document.getElementById('execution-logs').textContent = "Starting execution...\n";
+
+                try {
+                    const response = await fetch('/execute', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, actions })
+                    });
+
+                    const result = await response.json();
+                    document.getElementById('execution-status').innerHTML = "Execution completed!";
+
+                    if (result.logs) {
+                        document.getElementById('execution-logs').textContent = result.logs;
+                    }
+                } catch (error) {
+                    document.getElementById('execution-status').innerHTML = "Execution failed";
+                    document.getElementById('execution-logs').textContent += `Error: ${error.message}\n`;
+                } finally {
+                    document.getElementById('execute-btn').disabled = false;
+                }
+            }
+        </script>
+
+        <style>
+            #execute-btn:disabled {
+                background-color: #ccc;
+                cursor: not-allowed;
+            }
+        </style>
+
+<!--        <script>-->
+<!--            // Add to existing script-->
+<!--            async function executeActions() {-->
+<!--                const actions = window.currentResponse?.llm_response?.action_sequence || [];-->
+<!--                const url = document.getElementById('url').value;-->
+
+<!--                if (actions.length === 0) {-->
+<!--                    alert("No actions to execute");-->
+<!--                    return;-->
+<!--                }-->
+
+<!--                document.getElementById('execute-btn').disabled = true;-->
+<!--                document.getElementById('execution-status').innerHTML = "Executing actions...";-->
+
+<!--                try {-->
+<!--                    await fetch('/execute', {-->
+<!--                        method: 'POST',-->
+<!--                        headers: { 'Content-Type': 'application/json' },-->
+<!--                        body: JSON.stringify({ url, actions })-->
+<!--                    });-->
+<!--                    document.getElementById('execution-status').innerHTML = "Actions executed successfully!";-->
+<!--                } catch (error) {-->
+<!--                    document.getElementById('execution-status').innerHTML = `Error: ${error.message}`;-->
+<!--                } finally {-->
+<!--                    document.getElementById('execute-btn').disabled = false;-->
+<!--                }-->
+<!--            }-->
+
+<!--            // Update processRequest to store response-->
+<!--            async function processRequest() {-->
+<!--                // ... existing code ...-->
+<!--                window.currentResponse = data;  // Store for execution-->
+<!--            }-->
+<!--        </script>-->
+
+        <div class="card">
+            <h2>Scraped Data</h2>
+            <pre id="scraped-data"></pre>
+        </div>
+    </div>
+
+<!--    <script>-->
+<!--        async function processRequest() {-->
+<!--            const url = document.getElementById('url').value;-->
+<!--            const query = document.getElementById('query').value;-->
+
+<!--            const response = await fetch('/process', {-->
+<!--                method: 'POST',-->
+<!--                headers: { 'Content-Type': 'application/json' },-->
+<!--                body: JSON.stringify({ url, query })-->
+<!--            });-->
+
+<!--            const data = await response.json();-->
+
+<!--            // Display guidance-->
+<!--            const guidance = data.llm_response;-->
+<!--            if (guidance.verbal_guide) {-->
+<!--                document.getElementById('guidance').innerHTML =-->
+<!--                    `<h3>Step-by-Step Guidance:</h3><p>${guidance.verbal_guide}</p>` +-->
+<!--                    `<h3>Actions:</h3><pre>${JSON.stringify(guidance.action_sequence, null, 2)}</pre>`;-->
+<!--            } else {-->
+<!--                document.getElementById('guidance').innerHTML =-->
+<!--                    `<p>Error: ${guidance.error || 'No guidance generated'}</p>`;-->
+<!--            }-->
+
+<!--            // Display scraped data-->
+<!--            document.getElementById('scraped-data').textContent =-->
+<!--                JSON.stringify(data.website_data.elements, null, 2);-->
+<!--        }-->
+<!--    </script>-->
+
+    <button onclick="speakGuidance()">Read Guidance Aloud</button>
+
+    <script>
+        // Store the current response globally
+        let currentResponse = null;
+
+        async function processRequest() {
+            const url = document.getElementById('url').value;
+            const query = document.getElementById('query').value;
+
+            const response = await fetch('/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, query })
+            });
+
+            const data = await response.json();
+            currentResponse = data;  // Store the response globally
+
+            // Display guidance
+            const guidance = data.llm_response;
+            if (guidance.action_sequence) {
+                document.getElementById('guidance').innerHTML =
+                    `<h3>Step-by-Step Guidance:</h3><p>${guidance.verbal_guide}</p>` +
+                    `<h3>Actions:</h3><pre>${JSON.stringify(guidance.action_sequence, null, 2)}</pre>`;
+            } else {
+                document.getElementById('guidance').innerHTML =
+                    `<p>Error: ${guidance.error || 'No guidance generated'}</p>`;
+            }
+
+            // Display scraped data
+            document.getElementById('scraped-data').textContent =
+                JSON.stringify(data.website_data.elements, null, 2);
+        }
+
+<!--        async function executeActions() {-->
+<!--            if (!currentResponse || !currentResponse.llm_response?.action_sequence) {-->
+<!--                alert("No actions available. Please process a request first.");-->
+<!--                return;-->
+<!--            }-->
+
+<!--            const url = document.getElementById('url').value;-->
+<!--            const actions = currentResponse.llm_response.action_sequence;-->
+
+<!--            document.getElementById('execute-btn').disabled = true;-->
+<!--            document.getElementById('execution-status').innerHTML = "Executing actions...";-->
+
+<!--            try {-->
+<!--                await fetch('/execute', {-->
+<!--                    method: 'POST',-->
+<!--                    headers: { 'Content-Type': 'application/json' },-->
+<!--                    body: JSON.stringify({ url, actions })-->
+<!--                });-->
+<!--                document.getElementById('execution-status').innerHTML = "Actions executed successfully!";-->
+<!--            } catch (error) {-->
+<!--                document.getElementById('execution-status').innerHTML = `Error: ${error.message}`;-->
+<!--            } finally {-->
+<!--                document.getElementById('execute-btn').disabled = false;-->
+<!--            }-->
+<!--        }-->
+
+        async function speakGuidance() {
+            if (!currentResponse || !currentResponse.llm_response?.verbal_guide) {
+                alert("No guidance available. Please process a request first.");
+                return;
+            }
+
+            const guidance = currentResponse.llm_response.verbal_guide;
+            await fetch('/speak', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: guidance })
+            });
+        }
+    </script>
+</body>
+</html>
