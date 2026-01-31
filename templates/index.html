@@ -31,9 +31,13 @@
 
         <div class="card">
             <h2>Assistant Guidance</h2>
-            <div id="guidance">Submit a request to see instructions</div>
-            <button onclick="markLLMResult(true)" id="mark-correct-btn" disabled>Mark as Correct</button>
-            <button onclick="markLLMResult(false)" id="mark-incorrect-btn" disabled>Mark as Incorrect</button>
+            <div id="guidance-text">Submit a request to see instructions</div>
+            <label style="display: block; margin-top: 10px; font-weight: bold;">Actions:</label>
+            <textarea id="actions-json" rows="12" style="width: 100%; font-family: monospace; font-size: 13px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical;" placeholder="Action sequence JSON will appear here. Edit to test what works."></textarea>
+            <div style="margin-top: 10px;">
+                <button onclick="markLLMResult(true)" id="mark-correct-btn" disabled>Mark as Correct</button>
+                <button onclick="markLLMResult(false)" id="mark-incorrect-btn" disabled>Mark as Incorrect</button>
+            </div>
         </div>
 
         <div class="card">
@@ -44,10 +48,13 @@
 
         <script>
             async function markLLMResult(isCorrect) {
-                if (!currentResponse || !currentResponse.llm_response?.action_sequence) {
+                if (!currentResponse) {
                     alert("No LLM result to label");
                     return;
                 }
+                const actions = getActionsFromTextarea();
+                const actionSequence = (actions && actions.length > 0) ? actions : (currentResponse.llm_response?.action_sequence || []);
+                const llmResponse = { ...(currentResponse.llm_response || {}), action_sequence: actionSequence };
 
                 const url = document.getElementById('url').value;
                 const query = document.getElementById('query').value;
@@ -56,7 +63,7 @@
                     url: url,
                     query: query,
                     scraped_data: currentResponse.website_data,
-                    llm_response: currentResponse.llm_response,
+                    llm_response: llmResponse,
                     correct: isCorrect
                 };
 
@@ -76,10 +83,12 @@
             }
 
             async function startManualRecording() {
-                if (!currentResponse || !currentResponse.llm_response?.action_sequence) {
+                if (!currentResponse) {
                     alert("No prior attempt to correct.");
                     return;
                 }
+                const actions = getActionsFromTextarea();
+                const actionSequence = (actions && actions.length > 0) ? actions : (currentResponse.llm_response?.action_sequence || []);
 
                 const url = document.getElementById('url').value;
                 const query = document.getElementById('query').value;
@@ -93,7 +102,7 @@
                             url: url,
                             query: query,
                             original_scrape: currentResponse.website_data,
-                            llm_action_sequence: currentResponse.llm_response.action_sequence
+                            llm_action_sequence: actionSequence
                         })
                     });
                     const result = await response.json();
@@ -114,14 +123,29 @@
         </div>
 
         <script>
+            function getActionsFromTextarea() {
+                const raw = document.getElementById('actions-json').value.trim();
+                if (!raw) return null;
+                try {
+                    const parsed = JSON.parse(raw);
+                    return Array.isArray(parsed) ? parsed : (parsed.action_sequence || [parsed]);
+                } catch (e) {
+                    return null;
+                }
+            }
+
             async function executeActions() {
-                if (!currentResponse || !currentResponse.llm_response?.action_sequence) {
-                    alert("No actions available. Please process a request first.");
+                if (!currentResponse) {
+                    alert("No request data. Please process a request first.");
+                    return;
+                }
+                const actions = getActionsFromTextarea();
+                if (!actions || actions.length === 0) {
+                    alert("No actions to run. Enter a valid action sequence JSON in the Actions field (e.g. [{\"action\":\"click\",\"target\":\"...\"}]).");
                     return;
                 }
 
                 const url = document.getElementById('url').value;
-                const actions = currentResponse.llm_response.action_sequence;
 
                 document.getElementById('execute-btn').disabled = true;
                 document.getElementById('manual-btn').disabled = false;
@@ -213,14 +237,15 @@
 
             const guidance = data.llm_response;
             if (guidance && guidance.action_sequence) {
-                document.getElementById('guidance').innerHTML =
-                    `<h3>Step-by-Step Guidance:</h3><p>${guidance.verbal_guide || ''}</p>` +
-                    `<h3>Actions:</h3><pre>${JSON.stringify(guidance.action_sequence, null, 2)}</pre>`;
+                document.getElementById('guidance-text').innerHTML =
+                    '<h3>Step-by-Step Guidance:</h3><p>' + (guidance.verbal_guide || '') + '</p>';
+                document.getElementById('actions-json').value = JSON.stringify(guidance.action_sequence, null, 2);
                 document.getElementById('mark-correct-btn').disabled = false;
                 document.getElementById('mark-incorrect-btn').disabled = false;
             } else {
-                document.getElementById('guidance').innerHTML =
-                    `<p>Error: ${(guidance && guidance.error) || 'No guidance generated'}</p>`;
+                document.getElementById('guidance-text').innerHTML =
+                    '<p>Error: ' + ((guidance && guidance.error) || 'No guidance generated') + '</p>';
+                document.getElementById('actions-json').value = '';
             }
 
             document.getElementById('scraped-data').textContent =
@@ -252,7 +277,8 @@
                 data.website_data && data.website_data.elements
                     ? JSON.stringify(data.website_data.elements, null, 2)
                     : '';
-            document.getElementById('guidance').innerHTML = '<p>Scrape only. Run "Process Request" (with cached scrape) to get guidance.</p>';
+            document.getElementById('guidance-text').innerHTML = '<p>Scrape only. Run "Process Request" (with cached scrape) to get guidance.</p>';
+            document.getElementById('actions-json').value = '';
         }
 
 

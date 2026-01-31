@@ -224,7 +224,13 @@ def record_manual_actions(url):
                 var active = document.activeElement;
                 if (!active || active === document.body) return;
                 var sel = buildSelector(active);
-                if (sel) window.recordPress(sel, e.key === " " ? "Space" : e.key);
+                if (!sel) return;
+                var tag = (active.tagName || "").toLowerCase();
+                if ((e.key === "Enter" || e.key === "Tab") && (tag === "input" || tag === "textarea" || tag === "select")) {
+                    var val = active.value || "";
+                    if (val) window.recordFill(sel, val);
+                }
+                window.recordPress(sel, e.key === " " ? "Space" : e.key);
             }, true);
 
             var lastScrollY = window.scrollY;
