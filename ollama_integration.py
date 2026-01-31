@@ -41,28 +41,32 @@ def get_llm_response(website_data, user_query):
     """
     model = OLLAMA_MODEL
     prompt = f"""
-You are an accessibility assistant. You must choose elements from the WEBSITE STRUCTURE below and output their exact "css_selector" or "xpath_selector" as the "target" for each action. Do not invent targets or use plain text labels.
+You are an accessibility assistant. The WEBSITE STRUCTURE below shows the currently VISIBLE part of the page only. Prefer actions that use only these elements; only suggest "scroll" if the user's goal clearly requires content that is not visible.
 
-WEBSITE STRUCTURE (each element has css_selector, xpath_selector, text, id, etc.):
+You must choose elements from the structure and use their exact "css_selector" or "xpath_selector" as "target". Prefer stable identifiers:
+- For buttons (especially search): prefer "aria_label" when present (e.g. button[aria-label="Search"] or the element's id like #search-icon-legacy). These are more reliable than long class strings.
+- For inputs: prefer id, name, or placeholder when present.
+
+WEBSITE STRUCTURE (each element has css_selector, xpath_selector, text, id, aria_label, role, etc.):
 {json.dumps(website_data.get('elements', []), indent=2)}
 
 USER REQUEST: "{user_query}"
 
 Output valid JSON with:
 - "action_sequence": list of action objects:
-  - "action": "click" | "fill" | "navigate"
-  - "target": MUST be the exact "css_selector" or "xpath_selector" string from an element in WEBSITE STRUCTURE above (e.g. "input#email", "button.submit-btn"). Use only values that appear in the structure.
+  - "action": "click" | "fill" | "navigate" | "press"
+  - "target": MUST be the exact "css_selector" or "xpath_selector" from the structure, OR a stable selector like button[aria-label="Search"] if that matches an element's aria_label. Use only values that appear in the structure.
   - "value": string to type (required for "fill" actions, omit for click/navigate)
+  - "key": for "press" actions (e.g. "Enter")
 - "verbal_guide": short step-by-step instructions in plain English
 
-Example (targets must come from the structure):
+Example (targets from structure; prefer aria-label for buttons):
 {{
   "action_sequence": [
-    {{"action": "fill", "target": "input#email", "value": "user@example.com"}},
-    {{"action": "fill", "target": "input#password", "value": "secret"}},
-    {{"action": "click", "target": "button.sign-in"}}
+    {{"action": "fill", "target": "input#search", "value": "query"}},
+    {{"action": "click", "target": "button[aria-label=\\"Search\\"]"}}
   ],
-  "verbal_guide": "Enter your email, then password, then click Sign In."
+  "verbal_guide": "Type in the search box, then click the Search button."
 }}
 """
 

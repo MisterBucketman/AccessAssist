@@ -5,6 +5,13 @@ from playwright.sync_api import sync_playwright
 
 from config import HEADLESS, SCRAPE_SCROLL_STEPS, SCRAPE_TIMEOUT_MS
 
+# Used when scraping from an existing page (session); fewer steps to limit unnecessary work
+SESSION_SCROLL_STEPS = 5
+# Minimal scroll steps for fast after-each-action scrape to capture changes quickly
+QUICK_SCROLL_STEPS = 2
+# Viewport only: no scroll, evaluate existing visible page first (do not scroll entire page)
+VIEWPORT_ONLY_SCROLL_STEPS = 0
+
 INTERACTIVE_SELECTORS = """
 a[href],
 button,
@@ -49,6 +56,29 @@ def scrape_page(url, headless=None):
 
         browser.close()
         return {"url": url, "elements": list(elements_data.values())}
+
+
+def scrape_from_page(page, url=None, scroll_steps=None):
+    """
+    Scrape visible interactive elements from an existing Playwright page.
+    Does not launch or close a browser. Use for session-based flow after navigation/actions.
+    url: optional; if None, uses page.url.
+    scroll_steps: optional; default SESSION_SCROLL_STEPS. Use VIEWPORT_ONLY_SCROLL_STEPS (0)
+    to scrape only the current viewport (no scroll) and evaluate existing page first.
+    """
+    if url is None:
+        url = page.url
+    steps = scroll_steps if scroll_steps is not None else SESSION_SCROLL_STEPS
+    elements_data = {}
+    seen_selectors = set()
+    if steps == 0:
+        collect_visible_elements(page, elements_data, seen_selectors)
+        return {"url": url, "elements": list(elements_data.values())}
+    for _ in range(steps):
+        collect_visible_elements(page, elements_data, seen_selectors)
+        page.evaluate("window.scrollBy(0, window.innerHeight);")
+        time.sleep(0.3)
+    return {"url": url, "elements": list(elements_data.values())}
 
 
 def collect_visible_elements(page, elements_data, seen_selectors):

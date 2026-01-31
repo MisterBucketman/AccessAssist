@@ -19,14 +19,20 @@
             <input type="text" id="url" placeholder="Enter URL" value="http://localhost:8000/index.html" style="width: 100%; padding: 8px; margin-bottom: 10px;">
             <input type="text" id="query" placeholder="What do you want to do?" style="width: 100%; padding: 8px; margin-bottom: 10px;">
             <label style="display: block; margin-bottom: 10px;">
-                <input type="checkbox" id="use-cache" title="Use saved scrape for this URL if available (skips scraping step)">
+                <input type="checkbox" id="use-live-session" checked title="Keep one browser tab open; scrape from it for continuous queries">
+                Use persistent browser (keep tab open for series of queries)
+            </label>
+            <label style="display: block; margin-bottom: 10px;">
+                <input type="checkbox" id="use-cache" title="Use saved scrape for this URL if available (only when persistent browser is off)">
                 Use cached scrape if available
             </label>
             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <button onclick="processRequest()">Process Request</button>
                 <button onclick="scrapeOnly()" style="background: #6b7280;">Scrape page only</button>
+                <button onclick="closeBrowserSession()" style="background: #991b1b;" id="close-session-btn">Close browser tab</button>
             </div>
             <div id="process-status" style="margin-top: 8px; font-size: 0.9em; color: #666;"></div>
+            <div id="session-status" style="margin-top: 4px; font-size: 0.85em; color: #059669;"></div>
         </div>
 
         <div class="card">
@@ -154,19 +160,36 @@
                 document.getElementById('execution-steps').innerHTML = "";
 
                 try {
+                        const useLiveSession = document.getElementById('use-live-session').checked;
                     const response = await fetch('/execute', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, actions })
+                        body: JSON.stringify({
+                            url,
+                            actions,
+                            query: document.getElementById('query').value.trim(),
+                            use_live_session: useLiveSession
+                        })
                     });
 
                     const result = await response.json();
+                    if (result.website_data) {
+                        currentResponse = { website_data: result.website_data, llm_response: currentResponse?.llm_response };
+                        document.getElementById('scraped-data').textContent =
+                            result.website_data.elements
+                                ? JSON.stringify(result.website_data.elements, null, 2)
+                                : '';
+                    }
+                    if (result.final_url) {
+                        document.getElementById('url').value = result.final_url;
+                    }
                     document.getElementById('execution-status').innerHTML =
-                        result.status === "success" ? "Execution completed!" : "Execution finished with errors.";
+                        result.status === "success" ? "Execution completed! Tab left open. Enter another query and click Process Request to continue." : "Execution finished with errors. Tab left open.";
                     if (result.final_url) {
                         document.getElementById('execution-status').innerHTML +=
                             " <a href=\"" + result.final_url + "\" target=\"_blank\">Open page</a>";
                     }
+                    refreshSessionStatus();
 
                     if (result.steps && result.steps.length > 0) {
                         const stepsHtml = result.steps.map((s, i) => {
@@ -208,17 +231,22 @@
         // Store the current response globally
         let currentResponse = null;
 
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshSessionStatus();
+        });
+
         async function processRequest() {
             const url = document.getElementById('url').value;
             const query = document.getElementById('query').value;
             const useCache = document.getElementById('use-cache').checked;
+            const useLiveSession = document.getElementById('use-live-session').checked;
             const statusEl = document.getElementById('process-status');
             statusEl.textContent = 'Processing...';
 
             const response = await fetch('/process', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, query, use_cache: useCache })
+                body: JSON.stringify({ url, query, use_cache: useCache, use_live_session: useLiveSession })
             });
 
             const data = await response.json();
@@ -233,7 +261,11 @@
             }
 
             currentResponse = data;
-            statusEl.textContent = data.used_cache ? 'Used cached scrape, then LLM.' : 'Scraped page, then LLM.';
+            if (data.current_url) document.getElementById('url').value = data.current_url;
+            statusEl.textContent = data.from_session
+                ? 'Scraped from open tab, then LLM. Enter another query to continue.'
+                : (data.used_cache ? 'Used cached scrape, then LLM.' : 'Scraped page, then LLM.');
+            refreshSessionStatus();
 
             const guidance = data.llm_response;
             if (guidance && guidance.action_sequence) {
@@ -281,6 +313,37 @@
             document.getElementById('actions-json').value = '';
         }
 
+
+        async function refreshSessionStatus() {
+            try {
+                const r = await fetch('/session_status');
+                const s = await r.json();
+                const el = document.getElementById('session-status');
+                if (s.has_session && s.current_url) {
+                    el.textContent = 'Browser tab open at: ' + s.current_url;
+                    el.style.color = '#059669';
+                } else {
+                    el.textContent = '';
+                }
+            } catch (e) {
+                document.getElementById('session-status').textContent = '';
+            }
+        }
+
+        async function closeBrowserSession() {
+            try {
+                const r = await fetch('/close_session', { method: 'POST' });
+                const s = await r.json();
+                if (s.status === 'success') {
+                    document.getElementById('session-status').textContent = 'Browser closed.';
+                    document.getElementById('session-status').style.color = '#666';
+                } else {
+                    document.getElementById('session-status').textContent = 'Error: ' + (s.error || 'unknown');
+                }
+            } catch (e) {
+                document.getElementById('session-status').textContent = 'Error: ' + e.message;
+            }
+        }
 
         async function speakGuidance() {
             if (!currentResponse || !currentResponse.llm_response?.verbal_guide) {

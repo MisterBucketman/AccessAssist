@@ -8,14 +8,78 @@ from flask import Flask, render_template, request, jsonify
 from playwright.sync_api import sync_playwright
 import pyttsx3
 
-from scraper import scrape_page
+from scraper import scrape_page, scrape_from_page, QUICK_SCROLL_STEPS, VIEWPORT_ONLY_SCROLL_STEPS
 from ollama_integration import get_llm_response
-from executor import execute_actions
+from executor import execute_actions, execute_actions_on_page
 from scrape_cache import get_cached_scrape, set_cached_scrape
+from browser_session import (
+    get_or_create_page,
+    scrape_current_page,
+    execute_on_session,
+    has_session,
+    get_current_url,
+    close_session as close_browser_session,
+)
 
 app = Flask(__name__)
 
 ALLOWED_SCHEMES = ("http", "https")
+
+
+def _target_findable_in_elements(target, elements):
+    """Check if target (selector or label) is findable in scraped elements."""
+    if not target or not isinstance(target, str):
+        return False
+    target_lower = target.strip().lower()
+    for el in (elements or []):
+        for key in ("css_selector", "xpath_selector", "id", "name", "placeholder", "aria_label", "text"):
+            val = el.get(key)
+            if not val:
+                continue
+            val = (val or "").strip()
+            if not val:
+                continue
+            if target_lower in val.lower() or val.lower() in target_lower:
+                return True
+            if key == "id" and target_lower == val.lower():
+                return True
+            if key == "text" and target_lower in val.lower():
+                return True
+    return False
+
+
+def evaluate_scroll_needed(page, remaining_actions, query, set_cache_fn):
+    """
+    Before scrolling: use cached scrape for current URL if available; otherwise
+    quick-scrape. Evaluate if current data is enough to execute the command.
+    If all remaining non-scroll actions have targets findable in the data,
+    return True (skip scroll). Otherwise return False.
+    set_cache_fn(url, data) is called when we scrape (so cache is used next time).
+    """
+    url = page.url
+    data = get_cached_scrape(url)
+    if not data or not data.get("elements"):
+        try:
+            data = scrape_from_page(page, scroll_steps=VIEWPORT_ONLY_SCROLL_STEPS)
+            elements = data.get("elements") or []
+            url = data.get("url") or url
+            set_cache_fn(url, data)
+        except Exception:
+            return False
+    else:
+        elements = data.get("elements") or []
+    for action in remaining_actions:
+        act = action.get("action")
+        target = action.get("target", "")
+        if act == "scroll":
+            continue
+        if act in ("click", "fill") and target:
+            if not _target_findable_in_elements(target, elements):
+                return False
+        if act == "press" and target:
+            if not _target_findable_in_elements(target, elements):
+                return False
+    return True
 
 
 def validate_url(url):
@@ -64,35 +128,71 @@ def scrape_only():
 @app.route('/process', methods=['POST'])
 def process():
     """
-    Process request: (1) Get scraped data (from cache if use_cache and available, else scrape and cache).
-    (2) Run LLM on scraped data + query.
+    Process request: (1) Get scraped data (from live session page if use_live_session,
+    else from cache if use_cache, else full scrape). (2) Run LLM on scraped data + query.
+    With use_live_session (default True), one Chromium tab stays open for continuous queries.
     """
     data = request.json or {}
     url = data.get('url', '').strip()
     query = data.get('query', '').strip()
     use_cache = data.get('use_cache', False)
+    use_live_session = data.get('use_live_session', True)
 
     ok, err = validate_url(url)
     if not ok:
         return jsonify({"error": err, "website_data": None, "llm_response": None}), 400
 
     website_data = None
-    if use_cache:
-        website_data = get_cached_scrape(url)
-    if website_data is None:
-        website_data = scrape_page(url)
-        set_cached_scrape(url, website_data)
-        used_cache = False
+    used_cache = False
+    from_session = False
+
+    if use_live_session:
+        try:
+            get_or_create_page(url)
+            if use_cache:
+                website_data = get_cached_scrape(url)
+                if website_data is None:
+                    current_url = get_current_url()
+                    if current_url:
+                        website_data = get_cached_scrape(current_url)
+            if website_data is None:
+                # Viewport only: evaluate existing visible page first; do not scroll entire page
+                website_data = scrape_current_page(scroll_steps=VIEWPORT_ONLY_SCROLL_STEPS)
+                set_cached_scrape(website_data.get("url", url), website_data)
+                from_session = True
+            else:
+                used_cache = True
+        except Exception as e:
+            if use_cache:
+                website_data = get_cached_scrape(url)
+                if website_data:
+                    used_cache = True
+            if website_data is None:
+                website_data = scrape_page(url)
+                set_cached_scrape(url, website_data)
     else:
-        used_cache = True
+        if use_cache:
+            website_data = get_cached_scrape(url)
+        if website_data is None:
+            website_data = scrape_page(url)
+            set_cached_scrape(url, website_data)
+        else:
+            used_cache = True
+
+    if website_data is None:
+        return jsonify({"error": "Could not get page data", "website_data": None, "llm_response": None}), 500
 
     llm_response = get_llm_response(website_data, query)
 
-    return jsonify({
+    out = {
         "website_data": website_data,
         "llm_response": llm_response,
-        "used_cache": used_cache
-    })
+        "used_cache": used_cache,
+        "from_session": from_session,
+    }
+    if from_session and has_session():
+        out["current_url"] = get_current_url()
+    return jsonify(out)
 
 
 @app.route('/label_llm_result', methods=['POST'])
@@ -260,21 +360,61 @@ def record_manual_actions(url):
 
 @app.route('/execute', methods=['POST'])
 def execute():
+    """
+    Run actions on the same Chromium instance (when use_live_session). After each action
+    the tab is quickly scraped and cached so all changes are taken into consideration.
+    Before each scroll, current data is scraped and evaluated; scroll is skipped if
+    the data is sufficient to execute remaining actions. Returns website_data after
+    execution for continuous flow.
+    """
     data = request.json or {}
     url = data.get('url', '').strip()
     actions = data.get('actions', [])
+    query = (data.get('query') or '').strip()
+    use_live_session = data.get('use_live_session', True)
 
     ok, err = validate_url(url)
     if not ok:
         return jsonify({"status": "error", "steps": [], "logs": err, "error": err}), 400
 
     try:
+        if use_live_session:
+            get_or_create_page(url)
+            # Quick scrape after each action so changes are captured efficiently
+            def after_each_action(page, step_index, step_result):
+                try:
+                    website_data = scrape_from_page(page, scroll_steps=QUICK_SCROLL_STEPS)
+                    set_cached_scrape(website_data.get("url", page.url), website_data)
+                except Exception:
+                    pass
+            # Before scroll: scrape and evaluate if current data is enough to execute the command
+            def before_scroll(page, remaining_actions, q):
+                return evaluate_scroll_needed(page, remaining_actions, q, set_cached_scrape)
+            result = execute_on_session(
+                actions,
+                query=query,
+                after_each_action=after_each_action,
+                before_scroll=before_scroll,
+            )
+            # Final scrape so next query has full state
+            try:
+                website_data = scrape_current_page()
+                set_cached_scrape(website_data.get("url", result.get("final_url") or url), website_data)
+            except Exception:
+                website_data = None
+            return jsonify({
+                "status": result.get("status", "error"),
+                "steps": result.get("steps", []),
+                "logs": "\n".join(result.get("logs", [])),
+                "final_url": result.get("final_url"),
+                "website_data": website_data,
+            })
         result = execute_actions(url, actions)
         return jsonify({
             "status": result.get("status", "error"),
             "steps": result.get("steps", []),
             "logs": "\n".join(result.get("logs", [])),
-            "final_url": result.get("final_url")
+            "final_url": result.get("final_url"),
         })
     except Exception as e:
         return jsonify({
@@ -283,6 +423,25 @@ def execute():
             "logs": str(e),
             "error": str(e)
         })
+
+
+@app.route('/session_status')
+def session_status():
+    """Return whether a browser session is active and its current URL (for continuous flow UX)."""
+    return jsonify({
+        "has_session": has_session(),
+        "current_url": get_current_url(),
+    })
+
+
+@app.route('/close_session', methods=['POST'])
+def close_session():
+    """Close the persistent browser tab. Use when done with the continuous flow."""
+    try:
+        close_browser_session()
+        return jsonify({"status": "success", "message": "Browser closed."})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 @app.route('/speak', methods=['POST'])
