@@ -24,12 +24,84 @@
         <div class="card">
             <h2>Assistant Guidance</h2>
             <div id="guidance">Submit a request to see instructions</div>
+            <button onclick="markLLMResult(true)" id="mark-correct-btn" disabled>Mark as Correct</button>
+            <button onclick="markLLMResult(false)" id="mark-incorrect-btn" disabled>Mark as Incorrect</button>
         </div>
+
+        <div class="card">
+            <h2>Manual Recording</h2>
+            <button onclick="startManualRecording()" id="manual-btn" disabled>Start Manual Recording</button>
+            <div id="manual-status">Idle</div>
+        </div>
+
+        <script>
+            async function markLLMResult(isCorrect) {
+                if (!currentResponse || !currentResponse.llm_response?.action_sequence) {
+                    alert("No LLM result to label");
+                    return;
+                }
+
+                const url = document.getElementById('url').value;
+                const query = document.getElementById('query').value;
+
+                const payload = {
+                    url: url,
+                    query: query,
+                    scraped_data: currentResponse.website_data,
+                    llm_response: currentResponse.llm_response,
+                    correct: isCorrect
+                };
+
+                try {
+                    const response = await fetch('/label_llm_result', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const result = await response.json();
+                    alert(`LLM result marked as ${isCorrect ? "Correct" : "Incorrect"} and saved.`);
+                } catch (err) {
+                    console.error(err);
+                    alert("Error saving label");
+                }
+            }
+
+            async function startManualRecording() {
+                if (!currentResponse || !currentResponse.llm_response?.action_sequence) {
+                    alert("No prior attempt to correct.");
+                    return;
+                }
+
+                const url = document.getElementById('url').value;
+                const query = document.getElementById('query').value;
+
+                document.getElementById('manual-status').innerHTML = "Recording...";
+                try {
+                    const response = await fetch('/manual_record', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            url: url,
+                            query: query,
+                            original_scrape: currentResponse.website_data,
+                            llm_action_sequence: currentResponse.llm_response.action_sequence
+                        })
+                    });
+                    const result = await response.json();
+                    document.getElementById('manual-status').innerHTML = `Recording Finished!`;
+                    console.log(result);
+                } catch (err) {
+                    document.getElementById('manual-status').innerHTML = `Error: ${err.message}`;
+                }
+            }
+        </script>
 
         <div class="card">
             <h2>Execute Actions</h2>
             <button onclick="executeActions()" id="execute-btn">Execute Actions</button>
             <div id="execution-status">Ready</div>
+            <div id="execution-steps" style="margin-top: 10px; font-size: 0.9em;"></div>
             <pre id="execution-logs" style="height: 200px; overflow: auto; background: #f4f4f4; padding: 10px; margin-top: 10px;"></pre>
         </div>
 
@@ -44,8 +116,10 @@
                 const actions = currentResponse.llm_response.action_sequence;
 
                 document.getElementById('execute-btn').disabled = true;
+                document.getElementById('manual-btn').disabled = false;
                 document.getElementById('execution-status').innerHTML = "Executing actions...";
                 document.getElementById('execution-logs').textContent = "Starting execution...\n";
+                document.getElementById('execution-steps').innerHTML = "";
 
                 try {
                     const response = await fetch('/execute', {
@@ -55,14 +129,27 @@
                     });
 
                     const result = await response.json();
-                    document.getElementById('execution-status').innerHTML = "Execution completed!";
+                    document.getElementById('execution-status').innerHTML =
+                        result.status === "success" ? "Execution completed!" : "Execution finished with errors.";
+                    if (result.final_url) {
+                        document.getElementById('execution-status').innerHTML +=
+                            " <a href=\"" + result.final_url + "\" target=\"_blank\">Open page</a>";
+                    }
 
+                    if (result.steps && result.steps.length > 0) {
+                        const stepsHtml = result.steps.map((s, i) => {
+                            const ok = s.success ? "&#9989;" : "&#10060;";
+                            const err = s.error ? " (" + s.error + ")" : "";
+                            return (i + 1) + ". " + ok + " " + s.action + " " + (s.target || "") + (s.value ? " = \"" + s.value + "\"" : "") + err;
+                        }).join("<br>");
+                        document.getElementById('execution-steps').innerHTML = "<strong>Steps:</strong><br>" + stepsHtml;
+                    }
                     if (result.logs) {
                         document.getElementById('execution-logs').textContent = result.logs;
                     }
                 } catch (error) {
                     document.getElementById('execution-status').innerHTML = "Execution failed";
-                    document.getElementById('execution-logs').textContent += `Error: ${error.message}\n`;
+                    document.getElementById('execution-logs').textContent += "Error: " + error.message + "\n";
                 } finally {
                     document.getElementById('execute-btn').disabled = false;
                 }
@@ -76,76 +163,11 @@
             }
         </style>
 
-<!--        <script>-->
-<!--            // Add to existing script-->
-<!--            async function executeActions() {-->
-<!--                const actions = window.currentResponse?.llm_response?.action_sequence || [];-->
-<!--                const url = document.getElementById('url').value;-->
-
-<!--                if (actions.length === 0) {-->
-<!--                    alert("No actions to execute");-->
-<!--                    return;-->
-<!--                }-->
-
-<!--                document.getElementById('execute-btn').disabled = true;-->
-<!--                document.getElementById('execution-status').innerHTML = "Executing actions...";-->
-
-<!--                try {-->
-<!--                    await fetch('/execute', {-->
-<!--                        method: 'POST',-->
-<!--                        headers: { 'Content-Type': 'application/json' },-->
-<!--                        body: JSON.stringify({ url, actions })-->
-<!--                    });-->
-<!--                    document.getElementById('execution-status').innerHTML = "Actions executed successfully!";-->
-<!--                } catch (error) {-->
-<!--                    document.getElementById('execution-status').innerHTML = `Error: ${error.message}`;-->
-<!--                } finally {-->
-<!--                    document.getElementById('execute-btn').disabled = false;-->
-<!--                }-->
-<!--            }-->
-
-<!--            // Update processRequest to store response-->
-<!--            async function processRequest() {-->
-<!--                // ... existing code ...-->
-<!--                window.currentResponse = data;  // Store for execution-->
-<!--            }-->
-<!--        </script>-->
-
         <div class="card">
             <h2>Scraped Data</h2>
             <pre id="scraped-data"></pre>
         </div>
     </div>
-
-<!--    <script>-->
-<!--        async function processRequest() {-->
-<!--            const url = document.getElementById('url').value;-->
-<!--            const query = document.getElementById('query').value;-->
-
-<!--            const response = await fetch('/process', {-->
-<!--                method: 'POST',-->
-<!--                headers: { 'Content-Type': 'application/json' },-->
-<!--                body: JSON.stringify({ url, query })-->
-<!--            });-->
-
-<!--            const data = await response.json();-->
-
-<!--            // Display guidance-->
-<!--            const guidance = data.llm_response;-->
-<!--            if (guidance.verbal_guide) {-->
-<!--                document.getElementById('guidance').innerHTML =-->
-<!--                    `<h3>Step-by-Step Guidance:</h3><p>${guidance.verbal_guide}</p>` +-->
-<!--                    `<h3>Actions:</h3><pre>${JSON.stringify(guidance.action_sequence, null, 2)}</pre>`;-->
-<!--            } else {-->
-<!--                document.getElementById('guidance').innerHTML =-->
-<!--                    `<p>Error: ${guidance.error || 'No guidance generated'}</p>`;-->
-<!--            }-->
-
-<!--            // Display scraped data-->
-<!--            document.getElementById('scraped-data').textContent =-->
-<!--                JSON.stringify(data.website_data.elements, null, 2);-->
-<!--        }-->
-<!--    </script>-->
 
     <button onclick="speakGuidance()">Read Guidance Aloud</button>
 
@@ -172,6 +194,8 @@
                 document.getElementById('guidance').innerHTML =
                     `<h3>Step-by-Step Guidance:</h3><p>${guidance.verbal_guide}</p>` +
                     `<h3>Actions:</h3><pre>${JSON.stringify(guidance.action_sequence, null, 2)}</pre>`;
+                    document.getElementById('mark-correct-btn').disabled = false;
+                    document.getElementById('mark-incorrect-btn').disabled = false;
             } else {
                 document.getElementById('guidance').innerHTML =
                     `<p>Error: ${guidance.error || 'No guidance generated'}</p>`;
@@ -182,31 +206,6 @@
                 JSON.stringify(data.website_data.elements, null, 2);
         }
 
-<!--        async function executeActions() {-->
-<!--            if (!currentResponse || !currentResponse.llm_response?.action_sequence) {-->
-<!--                alert("No actions available. Please process a request first.");-->
-<!--                return;-->
-<!--            }-->
-
-<!--            const url = document.getElementById('url').value;-->
-<!--            const actions = currentResponse.llm_response.action_sequence;-->
-
-<!--            document.getElementById('execute-btn').disabled = true;-->
-<!--            document.getElementById('execution-status').innerHTML = "Executing actions...";-->
-
-<!--            try {-->
-<!--                await fetch('/execute', {-->
-<!--                    method: 'POST',-->
-<!--                    headers: { 'Content-Type': 'application/json' },-->
-<!--                    body: JSON.stringify({ url, actions })-->
-<!--                });-->
-<!--                document.getElementById('execution-status').innerHTML = "Actions executed successfully!";-->
-<!--            } catch (error) {-->
-<!--                document.getElementById('execution-status').innerHTML = `Error: ${error.message}`;-->
-<!--            } finally {-->
-<!--                document.getElementById('execute-btn').disabled = false;-->
-<!--            }-->
-<!--        }-->
 
         async function speakGuidance() {
             if (!currentResponse || !currentResponse.llm_response?.verbal_guide) {

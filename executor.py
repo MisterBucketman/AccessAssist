@@ -1,112 +1,129 @@
-from playwright.sync_api import sync_playwright
-import time
+"""Execute action sequences (click, fill) on a page via Playwright. Returns structured step results."""
 import re
+import time
+from playwright.sync_api import sync_playwright
 
 
 def execute_actions(url, actions):
+    """
+    Run a list of actions on the given URL. Returns a dict with status, steps, logs, and optional final_url.
+    Does not block on input(); browser closes after actions complete.
+    """
+    steps = []
+    logs = []
+    final_url = None
+
+    def log(msg):
+        logs.append(msg)
+        print(msg)
+
     with sync_playwright() as p:
-        # Launch browser with visible UI
-        browser = p.chromium.launch(
-            headless=False,
-            slow_mo=1000,  # Slow down execution for visibility
-            args=["--start-maximized"]  # Start maximized
-        )
-        context = browser.new_context(no_viewport=True)  # Use full window
+        try:
+            browser = p.chromium.launch(
+                headless=False,
+                slow_mo=1000,
+                args=["--start-maximized"]
+            )
+        except Exception as e:
+            return {
+                "status": "error",
+                "steps": [],
+                "logs": [f"Failed to launch browser: {str(e)}"],
+                "error": str(e)
+            }
+
+        context = browser.new_context(no_viewport=True)
         page = context.new_page()
 
-        # Navigate to the URL
-        page.goto(url)
-        print(f"Opened page: {page.url}")
+        try:
+            page.goto(url)
+            final_url = page.url
+            log(f"Opened page: {page.url}")
+            page.wait_for_load_state("networkidle")
+            page.screenshot(path="before_actions.png")
+        except Exception as e:
+            log(f"Navigation error: {str(e)}")
+            browser.close()
+            return {
+                "status": "error",
+                "steps": [],
+                "logs": logs,
+                "error": str(e)
+            }
 
-        # Wait for page to load
-        page.wait_for_load_state("networkidle")
-
-        # Take screenshot for debugging
-        page.screenshot(path="before_actions.png")
-
-        # Execute each action
         for i, action in enumerate(actions):
             action_type = action.get("action")
-            target = action.get("target")
+            target = action.get("target", "")
             value = action.get("value", "")
 
-            print(f"\nExecuting action {i + 1}/{len(actions)}: {action}")
+            step_result = {
+                "action": action_type,
+                "target": target,
+                "success": False,
+                "error": None
+            }
+            if action_type == "fill":
+                step_result["value"] = value
+
+            log(f"\nExecuting action {i+1}/{len(actions)}: {action}")
 
             try:
-                if action_type == "fill":
-                    # Try multiple strategies to find the element
-                    if target.startswith("#"):
-                        element = page.locator(f"#{target[1:]}")
-                    elif target.startswith("."):
-                        element = page.locator(target)
-                    else:
-                        # Try by ID
-                        element = page.locator(f"#{target}")
-                        if element.count() == 0:
-                            # Try by name
-                            element = page.locator(f"[name='{target}']")
-                        if element.count() == 0:
-                            # Try by placeholder
-                            element = page.locator(f"[placeholder='{target}']")
-                        if element.count() == 0:
-                            # Try by label text (case-insensitive, partial match)
-                            element = page.get_by_label(re.compile(target, re.IGNORECASE), exact=False)
-                        if element.count() == 0:
-                            # Try by associated label text
-                            element = page.locator(f"label:has-text('{target}') + input")
+                if not target:
+                    step_result["error"] = "Missing target"
+                    steps.append(step_result)
+                    continue
 
-                    print(f"Found {element.count()} elements matching '{target}'")
+                if any(sym in target for sym in ["#", ".", "[", ">", " "]):
+                    element = page.locator(target)
+                else:
+                    element = page.locator(f"#{target}")
+                    if element.count() == 0:
+                        element = page.locator(f"[name='{target}']")
+                    if element.count() == 0:
+                        element = page.locator(f"[placeholder='{target}']")
+                    if element.count() == 0:
+                        element = page.get_by_label(re.compile(target, re.IGNORECASE), exact=False)
+                    if element.count() == 0:
+                        element = page.locator(f"label:has-text('{target}') + input")
 
-                    if element.count() > 0:
-                        element.first.scroll_into_view_if_needed()
+                log(f"Found {element.count()} elements matching '{target}'")
+
+                if element.count() > 0:
+                    element.first.scroll_into_view_if_needed()
+                    if action_type == "fill":
                         element.first.fill(value)
-                        print(f"Filled element: {target} with '{value}'")
-
-                        # Take screenshot after fill
-                        page.screenshot(path=f"after_action_{i}.png")
-                    else:
-                        print(f"No element found for: {target}")
-
-                elif action_type == "click":
-                    # Try multiple strategies to find the element
-                    if target.startswith("#"):
-                        element = page.locator(f"#{target[1:]}")
-                    elif target.startswith("."):
-                        element = page.locator(target)
-                    else:
-                        # Try by ID
-                        element = page.locator(f"#{target}")
-                        if element.count() == 0:
-                            # Try by text (case-insensitive, partial match)
-                            element = page.get_by_text(re.compile(target, re.IGNORECASE), exact=False)
-                        if element.count() == 0:
-                            # Try by role
-                            element = page.get_by_role("button", name=re.compile(target, re.IGNORECASE))
-                        if element.count() == 0:
-                            # Try by value attribute
-                            element = page.locator(f"[value='{target}']")
-
-                    print(f"Found {element.count()} elements matching '{target}'")
-
-                    if element.count() > 0:
-                        element.first.scroll_into_view_if_needed()
+                        log(f"Filled element '{target}' with '{value}'")
+                    elif action_type == "click":
                         element.first.click()
-                        print(f"Clicked element: {target}")
+                        log(f"Clicked element '{target}'")
+                    step_result["success"] = True
+                    page.screenshot(path=f"after_action_{i}.png")
+                else:
+                    step_result["error"] = f"No element found for: {target}"
+                    log(step_result["error"])
 
-                        # Take screenshot after click
-                        page.screenshot(path=f"after_action_{i}.png")
-                    else:
-                        print(f"No element found for: {target}")
-
-                # Add a short delay between actions
+                steps.append(step_result)
                 time.sleep(1)
 
             except Exception as e:
-                print(f"Error executing action: {action}")
-                print(f"Error details: {str(e)}")
+                step_result["error"] = str(e)
+                steps.append(step_result)
+                log(f"Error executing action: {action}")
+                log(f"Error details: {str(e)}")
 
-        # Final screenshot
-        page.screenshot(path="after_actions.png")
-        print("\nAll actions executed. Browser will remain open for inspection.")
-        input("Press Enter to close browser...")
+        try:
+            page.screenshot(path="after_actions.png")
+            final_url = page.url
+            log("\nAll actions executed.")
+        except Exception:
+            pass
+
         browser.close()
+
+    status = "success" if all(s.get("success") for s in steps) else "error"
+    return {
+        "status": status,
+        "steps": steps,
+        "logs": logs,
+        "final_url": final_url
+    }
