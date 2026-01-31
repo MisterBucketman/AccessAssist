@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+venv1/
+.env
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Data and outputs
+llm_labels/
+training_data/
+scrape_cache/
+merged_dataset.jsonl
+*-playwright-*
+*.png
+manual_recording.json
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

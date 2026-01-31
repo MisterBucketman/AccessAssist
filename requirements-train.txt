@@ -1,0 +1,9 @@
+# Training pipeline: merge + QLoRA fine-tuning
+# Install: pip install -r requirements-train.txt
+# Requires: pip install -r requirements.txt (base app deps)
+
+datasets>=2.14.0
+transformers>=4.36.0
+peft>=0.7.0
+accelerate>=0.25.0
+bitsandbytes>=0.41.0

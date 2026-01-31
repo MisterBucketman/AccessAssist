@@ -55,6 +55,9 @@ def execute_actions(url, actions):
             action_type = action.get("action")
             target = action.get("target", "")
             value = action.get("value", "")
+            key = action.get("key", "")
+            direction = action.get("direction", "")
+            amount = action.get("amount", 0)
 
             step_result = {
                 "action": action_type,
@@ -64,13 +67,71 @@ def execute_actions(url, actions):
             }
             if action_type == "fill":
                 step_result["value"] = value
+            elif action_type == "press":
+                step_result["key"] = key
+            elif action_type == "scroll":
+                step_result["direction"] = direction
+                step_result["amount"] = amount
 
             log(f"\nExecuting action {i+1}/{len(actions)}: {action}")
 
             try:
-                if not target:
+                if action_type == "scroll":
+                    try:
+                        am = int(amount) if amount else 300
+                        dx = dy = 0
+                        if direction == "down":
+                            dy = am
+                        elif direction == "up":
+                            dy = -am
+                        elif direction == "right":
+                            dx = am
+                        elif direction == "left":
+                            dx = -am
+                        else:
+                            dy = am
+                        page.evaluate(f"window.scrollBy({dx}, {dy})")
+                        log(f"Scrolled {direction} by {abs(dx) or abs(dy)}")
+                        step_result["success"] = True
+                    except Exception as e:
+                        step_result["error"] = str(e)
+                    steps.append(step_result)
+                    time.sleep(0.3)
+                    continue
+
+                if action_type != "press" and not target:
                     step_result["error"] = "Missing target"
                     steps.append(step_result)
+                    continue
+
+                if action_type == "press":
+                    key_to_send = key or "Enter"
+                    if key_to_send == "Space":
+                        key_to_send = " "
+                    if target:
+                        if any(sym in target for sym in ["#", ".", "[", ">", " "]):
+                            element = page.locator(target)
+                        else:
+                            element = page.locator(f"#{target}")
+                            if element.count() == 0:
+                                element = page.locator(f"[name='{target}']")
+                            if element.count() == 0:
+                                element = page.locator(target)
+                        if element.count() > 0:
+                            element.first.scroll_into_view_if_needed()
+                            element.first.press(key_to_send)
+                            log(f"Pressed '{key_to_send}' on '{target}'")
+                            step_result["success"] = True
+                        else:
+                            page.keyboard.press(key_to_send)
+                            log(f"Pressed '{key_to_send}' (no target)")
+                            step_result["success"] = True
+                    else:
+                        page.keyboard.press(key_to_send)
+                        log(f"Pressed '{key_to_send}'")
+                        step_result["success"] = True
+                    steps.append(step_result)
+                    time.sleep(0.3)
                     continue
 
                 if any(sym in target for sym in ["#", ".", "[", ">", " "]):

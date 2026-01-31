@@ -18,7 +18,15 @@
             <h2>Website Information</h2>
             <input type="text" id="url" placeholder="Enter URL" value="http://localhost:8000/index.html" style="width: 100%; padding: 8px; margin-bottom: 10px;">
             <input type="text" id="query" placeholder="What do you want to do?" style="width: 100%; padding: 8px; margin-bottom: 10px;">
-            <button onclick="processRequest()">Process Request</button>
+            <label style="display: block; margin-bottom: 10px;">
+                <input type="checkbox" id="use-cache" title="Use saved scrape for this URL if available (skips scraping step)">
+                Use cached scrape if available
+            </label>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button onclick="processRequest()">Process Request</button>
+                <button onclick="scrapeOnly()" style="background: #6b7280;">Scrape page only</button>
+            </div>
+            <div id="process-status" style="margin-top: 8px; font-size: 0.9em; color: #666;"></div>
         </div>
 
         <div class="card">
@@ -140,7 +148,8 @@
                         const stepsHtml = result.steps.map((s, i) => {
                             const ok = s.success ? "&#9989;" : "&#10060;";
                             const err = s.error ? " (" + s.error + ")" : "";
-                            return (i + 1) + ". " + ok + " " + s.action + " " + (s.target || "") + (s.value ? " = \"" + s.value + "\"" : "") + err;
+                            let detail = (s.target || "") + (s.value ? " = \"" + s.value + "\"" : "") + (s.key ? " key=\"" + s.key + "\"" : "") + (s.direction ? " " + s.direction + " " + (s.amount || "") : "");
+                            return (i + 1) + ". " + ok + " " + s.action + " " + detail.trim() + err;
                         }).join("<br>");
                         document.getElementById('execution-steps').innerHTML = "<strong>Steps:</strong><br>" + stepsHtml;
                     }
@@ -178,32 +187,72 @@
         async function processRequest() {
             const url = document.getElementById('url').value;
             const query = document.getElementById('query').value;
+            const useCache = document.getElementById('use-cache').checked;
+            const statusEl = document.getElementById('process-status');
+            statusEl.textContent = 'Processing...';
 
             const response = await fetch('/process', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, query })
+                body: JSON.stringify({ url, query, use_cache: useCache })
             });
 
             const data = await response.json();
-            currentResponse = data;  // Store the response globally
-
-            // Display guidance
-            const guidance = data.llm_response;
-            if (guidance.action_sequence) {
-                document.getElementById('guidance').innerHTML =
-                    `<h3>Step-by-Step Guidance:</h3><p>${guidance.verbal_guide}</p>` +
-                    `<h3>Actions:</h3><pre>${JSON.stringify(guidance.action_sequence, null, 2)}</pre>`;
-                    document.getElementById('mark-correct-btn').disabled = false;
-                    document.getElementById('mark-incorrect-btn').disabled = false;
-            } else {
-                document.getElementById('guidance').innerHTML =
-                    `<p>Error: ${guidance.error || 'No guidance generated'}</p>`;
+            if (!response.ok) {
+                statusEl.textContent = data.error || 'Request failed';
+                if (data.website_data) {
+                    currentResponse = data;
+                    document.getElementById('scraped-data').textContent =
+                        JSON.stringify(data.website_data.elements, null, 2);
+                }
+                return;
             }
 
-            // Display scraped data
+            currentResponse = data;
+            statusEl.textContent = data.used_cache ? 'Used cached scrape, then LLM.' : 'Scraped page, then LLM.';
+
+            const guidance = data.llm_response;
+            if (guidance && guidance.action_sequence) {
+                document.getElementById('guidance').innerHTML =
+                    `<h3>Step-by-Step Guidance:</h3><p>${guidance.verbal_guide || ''}</p>` +
+                    `<h3>Actions:</h3><pre>${JSON.stringify(guidance.action_sequence, null, 2)}</pre>`;
+                document.getElementById('mark-correct-btn').disabled = false;
+                document.getElementById('mark-incorrect-btn').disabled = false;
+            } else {
+                document.getElementById('guidance').innerHTML =
+                    `<p>Error: ${(guidance && guidance.error) || 'No guidance generated'}</p>`;
+            }
+
             document.getElementById('scraped-data').textContent =
-                JSON.stringify(data.website_data.elements, null, 2);
+                data.website_data && data.website_data.elements
+                    ? JSON.stringify(data.website_data.elements, null, 2)
+                    : '';
+        }
+
+        async function scrapeOnly() {
+            const url = document.getElementById('url').value;
+            const statusEl = document.getElementById('process-status');
+            statusEl.textContent = 'Scraping...';
+
+            const response = await fetch('/scrape', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                statusEl.textContent = data.error || 'Scrape failed';
+                return;
+            }
+
+            currentResponse = { website_data: data.website_data, llm_response: null };
+            statusEl.textContent = 'Page scraped and cached. Use "Process Request" with "Use cached scrape" to run LLM only.';
+            document.getElementById('scraped-data').textContent =
+                data.website_data && data.website_data.elements
+                    ? JSON.stringify(data.website_data.elements, null, 2)
+                    : '';
+            document.getElementById('guidance').innerHTML = '<p>Scrape only. Run "Process Request" (with cached scrape) to get guidance.</p>';
         }
 
 
