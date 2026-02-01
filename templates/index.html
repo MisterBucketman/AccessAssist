@@ -20,7 +20,7 @@
             <input type="text" id="query" placeholder="What do you want to do?" style="width: 100%; padding: 8px; margin-bottom: 10px;">
             <label style="display: block; margin-bottom: 10px;">
                 <input type="checkbox" id="use-live-session" checked title="Keep one browser tab open; scrape from it for continuous queries">
-                Use persistent browser (keep tab open for series of queries)
+                Browser Persistence
             </label>
             <label style="display: block; margin-bottom: 10px;">
                 <input type="checkbox" id="use-cache" title="Use saved scrape for this URL if available (only when persistent browser is off)">
@@ -193,7 +193,7 @@
 
                     if (result.steps && result.steps.length > 0) {
                         const stepsHtml = result.steps.map((s, i) => {
-                            const ok = s.success ? "&#9989;" : "&#10060;";
+                            const ok = s.success ? "Success;" : "Failure;";
                             const err = s.error ? " (" + s.error + ")" : "";
                             let detail = (s.target || "") + (s.value ? " = \"" + s.value + "\"" : "") + (s.key ? " key=\"" + s.key + "\"" : "") + (s.direction ? " " + s.direction + " " + (s.amount || "") : "");
                             return (i + 1) + ". " + ok + " " + s.action + " " + detail.trim() + err;

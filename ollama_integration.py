@@ -55,18 +55,19 @@ USER REQUEST: "{user_query}"
 Output valid JSON with:
 - "action_sequence": list of action objects:
   - "action": "click" | "fill" | "navigate" | "press"
-  - "target": MUST be the exact "css_selector" or "xpath_selector" from the structure, OR a stable selector like button[aria-label="Search"] if that matches an element's aria_label. Use only values that appear in the structure.
+  "target": MUST be the exact "css_selector" or "xpath_selector" string from an element in WEBSITE STRUCTURE above (e.g. "input#email", "button.submit-btn"). Use only values that appear in the structure.
   - "value": string to type (required for "fill" actions, omit for click/navigate)
   - "key": for "press" actions (e.g. "Enter")
 - "verbal_guide": short step-by-step instructions in plain English
 
-Example (targets from structure; prefer aria-label for buttons):
+Example (targets must come from the website structure):
 {{
   "action_sequence": [
-    {{"action": "fill", "target": "input#search", "value": "query"}},
-    {{"action": "click", "target": "button[aria-label=\\"Search\\"]"}}
+    {{"action": "fill", "target": "input#email", "value": "user@example.com"}},
+    {{"action": "fill", "target": "input#password", "value": "secret"}},
+    {{"action": "click", "target": "button.sign-in"}}
   ],
-  "verbal_guide": "Type in the search box, then click the Search button."
+  "verbal_guide": "Enter your email, then password, then click Sign In."
 }}
 """
 
